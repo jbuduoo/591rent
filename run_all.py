@@ -13,7 +13,9 @@ def run_script(script_name, description):
         print(f"\n  [OK] {description} - Done!")
     else:
         print(f"\n  [ERROR] {description} - Failed.")
-        input("\n  請按 Enter 鍵結束，並將畫面截圖給技術人員...")
+        # Only wait for input if NOT running in GitHub Actions
+        if not os.getenv("GITHUB_ACTIONS"):
+            input("\n  請按 Enter 鍵結束，並將畫面截圖給技術人員...")
         sys.exit(1)
 
 if __name__ == "__main__":
@@ -38,4 +40,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n  💥 發生非預期錯誤：{e}")
 
-    input("\n  按 Enter 鍵關閉視窗...")
+    # Only wait for input if NOT running in GitHub Actions
+    if not os.getenv("GITHUB_ACTIONS"):
+        input("\n  按 Enter 鍵關閉視窗...")
