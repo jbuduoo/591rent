@@ -1,0 +1,331 @@
+import asyncio
+import pandas as pd
+import os
+import random
+import re
+import json
+from playwright.async_api import async_playwright
+from sheets_helper import SheetsHelper
+
+# 設定
+CSV_FILE = "pending_urls.csv"
+EXCEL_FILE = "591_rentals.xlsx"
+
+# 重新抓取現有 ID 資料
+RE_SCRAPE_ALL = False 
+
+# --- [修復] 補回遺失的副程式 ---py
+async def extract_from_bg_data(p, s_data):
+    try:
+        state = None
+        var_name = "Unknown"
+        for v_name in ["__NUXT__", "__NEXT_DATA__", "__m_initial_state__"]:
+            state = await p.evaluate(f"() => window.{v_name}")
+            if state:
+                var_name = f"{v_name} (Window)"
+                break
+        if not state:
+            html_content = await p.content()
+            nuxt_m = re.search(r'__NUXT__\s*=\s*(.*?);\s*</script>', html_content, re.DOTALL)
+            if nuxt_m:
+                js_code = nuxt_m.group(1)
+                json_m = re.search(r'({.*})', js_code, re.DOTALL)
+                if json_m:
+                    try:
+                        state = json.loads(json_m.group(1))
+                        var_name = "Regex (Nuxt HTML)"
+                    except: pass
+        if not state: return
+
+        data = {}
+        if "NUXT" in var_name:
+            nuxt_all = state.get("data", {})
+            for key, val in nuxt_all.items():
+                if isinstance(val, dict):
+                    if val.get("data", {}).get("linkInfo"):
+                        data = val.get("data", {})
+                        break
+                    if val.get("linkInfo"):
+                        data = val
+                        break
+        if not data:
+            props = state.get("props", {}).get("pageProps", {})
+            data = props.get("info", {}).get("data", {}) or props.get("detail", {}).get("data", {})
+        
+        if not data: return
+        link_info = data.get("linkInfo", {})
+        house_info = data.get("houseInfo", data.get("ware", {})) or {}
+        
+        if s_data["email"] == "無":
+            email = link_info.get("email") or data.get("email")
+            if email: s_data["email"] = str(email)
+        
+        if s_data["api_phone"] == "無":
+            aph = link_info.get("mobile") or link_info.get("phone") or \
+                  link_info.get("ware_mobile") or data.get("mobile")
+            if aph: 
+                s_aph = str(aph).strip()
+                if "0972528577" not in s_aph.replace("-", ""):
+                    s_data["api_phone"] = s_aph
+        
+        remark = house_info.get("houseRemark") or house_info.get("remark") or ""
+        if remark:
+            f_info = []
+            p_res = re.findall(r'09\d{2}-?\d{3}-?\d{3}', remark)
+            if p_res: f_info.append(f"電話:{p_res[0]}")
+            l_res = re.findall(r'(?:LINE|line|ID|id|賴|加賴|帳號|帳戶|++)\s?[:：]?\s?([a-zA-Z0-9._-]+)', remark)
+            if l_res:
+                clean = [m for m in l_res if len(m) > 2 and m not in ["房屋", "介紹", "歡迎"]]
+                if clean: f_info.append(f"LINE:{clean[0]}")
+            if f_info:
+                s_data["remark_info"] = " | ".join(f_info)
+    except: pass
+
+async def extract_details():
+    if not os.path.exists(CSV_FILE):
+        print(f"❌ 找不到 {CSV_FILE}，請先執行 1_fetch_urls.py")
+        return
+
+    try:
+        df_pending = pd.read_csv(CSV_FILE)
+    except:
+        return
+        
+    if len(df_pending) == 0:
+        return
+
+    # 定義電話標準化函數 (只留數字)
+    def normalize_phone(p):
+        if not p or pd.isna(p): return ""
+        return re.sub(r'\D', '', str(p).replace("誠徵", ""))
+
+    # 讀取現有的資料庫，用來判斷「案件ID」與「電話」是否已存在
+    existing_ids = set()
+    existing_phones = set()
+    if os.path.exists(EXCEL_FILE):
+        try:
+            df_old = pd.read_excel(EXCEL_FILE)
+            if '案件ID' in df_old.columns:
+                existing_ids = set(df_old['案件ID'].astype(str).tolist())
+            
+            if '電話' in df_old.columns:
+                for p in df_old['電話'].astype(str).tolist():
+                    norm_p = normalize_phone(p)
+                    if norm_p and norm_p not in ["", "591"]:
+                        existing_phones.add(norm_p)
+            
+            print(f"📖 已讀取現有資料庫，共有 {len(existing_ids)} 筆案件。")
+        except:
+            pass
+
+    # --- [新增] 初始化 Google Sheets 輔助類別 ---
+    sheets = SheetsHelper()
+    if sheets.authenticated:
+        cloud_ids = sheets.get_existing_keys("租屋", key_column_index=1)
+        if cloud_ids:
+            existing_ids.update(cloud_ids)
+            print(f"☁️ 已同步 Google Sheets 資料，目前共有 {len(existing_ids)} 筆案件 (含雲端)。")
+
+    # --- [優化] 併發控制與資源攔截 ---
+    sem = asyncio.Semaphore(3)  # 同時處理 3 個分頁
+    save_lock = asyncio.Lock()  # 避免同時寫入 Excel
+
+    async def fetch_one(context, url, index, total):
+        async with sem:
+            shared_data = {"email": "無", "api_phone": "無", "remark_info": "無", "address": "未知"}
+            page = await context.new_page()
+            
+            # [核心優化] 資源攔截：阻擋圖片、CSS、字體載入，節省 70% 流量與時間
+            async def block_resources(route):
+                if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
+                    await route.abort()
+                else:
+                    await route.continue_()
+            await page.route("**/*", block_resources)
+
+            async def handle_response(response):
+                url_res = response.url
+                if ("v2/web/rent/detail" in url_res or "bff-house" in url_res) and ".html" not in url_res:
+                    if response.status == 200:
+                        try:
+                            res_json = await response.json()
+                            data = res_json.get("data", {})
+                            if not data: return
+                            info = data.get("houseInfo", data.get("ware", {}))
+                            contact = data.get("linkInfo", data.get("contactInfo", {}))
+                            email = info.get("email") or contact.get("email") or data.get("email")
+                            if email: shared_data["email"] = str(email)
+                            api_p = contact.get("mobile") or info.get("mobile") or \
+                                    contact.get("phone") or contact.get("ware_mobile") or \
+                                    info.get("phone") or data.get("mobile")
+                            if api_p: shared_data["api_phone"] = str(api_p).strip()
+                            # [新增] 從 API 擷取地址
+                            if shared_data["address"] == "未知":
+                                addr = info.get("address") or info.get("addr") or \
+                                       data.get("address") or data.get("addr") or \
+                                       info.get("fullAddress") or info.get("full_address")
+                                if addr: shared_data["address"] = str(addr).strip()
+                        except: pass
+            
+            page.on("response", handle_response)
+            
+            try:
+                print(f"🔍 [{index}/{total}] 處理中: {url}")
+                await page.goto(url, wait_until="domcontentloaded", timeout=40000)
+                
+                # 等待 API 或特定資料載入 (縮短等待循環)
+                for _ in range(5):
+                    if shared_data["api_phone"] != "無": break
+                    await asyncio.sleep(0.5)
+                
+                if shared_data["api_phone"] == "無" or shared_data["email"] == "無":
+                    await extract_from_bg_data(page, shared_data)
+
+                # 抓取基本資訊
+                title = "未知"
+                for sel in [".house-title h1", "h1", ".detail-title-content"]:
+                    if await page.locator(sel).count() > 0:
+                        title = (await page.locator(sel).first.inner_text()).strip()
+                        break
+                
+                price = "0"
+                for sel in [".price strong", ".house-price"]:
+                    if await page.locator(sel).count() > 0:
+                        price = (await page.locator(sel).first.inner_text()).strip()
+                        break
+
+                # 地址：優先用 API 抓到的，否則再嘗試 DOM
+                address = shared_data["address"]
+                if address == "未知":
+                    try:
+                        # 嘗試等待地址元素出現（最多 5 秒）
+                        await page.wait_for_selector(".load-map", timeout=5000)
+                    except: pass
+                    for addr_sel in [".load-map", ".house-addr", ".info-addr",
+                                     "[class*='addr']", ".detail-address"]:
+                        if await page.locator(addr_sel).count() > 0:
+                            addr_text = (await page.locator(addr_sel).first.inner_text()).strip()
+                            if addr_text:
+                                address = addr_text
+                                break
+
+                owner = "未知"
+                pot_locs = page.locator(".contact-info .name, .contact-card .name, section.contact .name")
+                for i in range(await pot_locs.count()):
+                    t = (await pot_locs.nth(i).inner_text()).strip()
+                    if t and not any(tag in t for tag in ["交通", "生活", "捷運"]):
+                        owner = t
+                        break
+
+                phone = "未獲取"
+                if shared_data["api_phone"] != "無":
+                    tmp_ph = shared_data["api_phone"]
+                    if "0972528577" in tmp_ph.replace("-", ""): phone = "591電話"
+                    else: phone = tmp_ph
+                
+                if (phone in ["未獲取", "591電話"]) and shared_data.get("remark_info") != "無":
+                    match_rem = re.search(r'電話:(09[0-9-]+)', shared_data["remark_info"])
+                    if match_rem: phone = match_rem.group(1)
+
+                if phone in ["未獲取", "591電話"]:
+                    try:
+                        btns = page.locator("button:has-text('全部'), button:has-text('電話'), .t5-button--info")
+                        if await btns.count() > 0:
+                            await btns.first.click()
+                            await asyncio.sleep(0.5)
+                    except: pass
+                    for s_loc in await page.locator("span:has-text('09'), a:has-text('09')").all():
+                        txt_ph = await s_loc.inner_text()
+                        m = re.search(r'(09\d{2}-\d{3}-\d{3}|09\d{8,})', str(txt_ph))
+                        if m:
+                            tmp_ph = str(m.group(1))
+                            if "0972528577" in tmp_ph.replace("-", ""): phone = "591電話"
+                            else:
+                                phone = tmp_ph
+                                break
+
+                if phone not in ["未獲取", "591電話"]:
+                    norm_curr = normalize_phone(phone)
+                    if norm_curr in existing_phones: phone = f"{phone}已有"
+                    else: existing_phones.add(norm_curr)
+
+                match_cid = re.search(r'/(\d+)', url)
+                curr_cid = match_cid.group(1) if match_cid else "未知"
+
+                res = {
+                    "案件ID": curr_cid,
+                    "案件名稱": title,
+                    "租金": price,
+                    "地址": address.replace("地圖", "").replace("查看地圖", "").strip(),
+                    "屋主/聯絡人": owner,
+                    "電話": phone,
+                    "網址": url,
+                    "最後更新日": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+                }
+                
+                async with save_lock:
+                    save_single(res, EXCEL_FILE, sheets)
+                
+                print(f"✅ 完成: {title[:10]} | 租金: {price} | 電話: {phone}")
+                await asyncio.sleep(random.uniform(1, 3)) # 縮短延遲
+
+            except Exception as e:
+                print(f"❌ 錯誤 ({url}): {e}")
+            finally:
+                await page.close()
+
+    async with async_playwright() as p:
+        print(f"💡 啟動瀏覽器中 (背景模式)...")
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
+
+        all_urls = df_pending["url"].tolist()
+        urls_to_process = []
+        for u in all_urls:
+            match = re.search(r'/(\d+)', str(u))
+            if match:
+                case_id = str(match.group(1))
+                if case_id not in existing_ids or RE_SCRAPE_ALL:
+                    urls_to_process.append(u)
+        
+        print(f"📊 待處理清單: 總共 {len(all_urls)} 筆，剩餘 {len(urls_to_process)} 筆需處理。")
+        if not urls_to_process:
+            print("🏁 沒有新案件需要處理。")
+            await browser.close()
+            return
+
+        # --- 使用 asyncio.gather 進行併發處理 ---
+        tasks = []
+        for i, url in enumerate(urls_to_process):
+            tasks.append(fetch_one(context, url, i + 1, len(urls_to_process)))
+        
+        await asyncio.gather(*tasks)
+        await browser.close()
+
+def save_single(item, file_path, sheets=None):
+    # 同步至 Google Sheets (每筆更新)
+    if sheets and sheets.authenticated:
+        sheets.sync_data("租屋", item)
+
+    # 仍然保留 Excel 作為本地備份 (或是您可以選擇註解掉下一段)
+    df_new = pd.DataFrame([item])
+    if os.path.exists(file_path):
+        try:
+            df_old = pd.read_excel(file_path)
+            for col in ['Email', 'API電話', '介紹中聯絡資訊', 'LINE連結']:
+                if col in df_old.columns: 
+                    df_old = df_old.drop(columns=[col])
+            
+            df_old['案件ID'] = df_old['案件ID'].astype(str)
+            df_new['案件ID'] = df_new['案件ID'].astype(str)
+            final = pd.concat([df_old, df_new], ignore_index=True).drop_duplicates(subset=['案件ID'], keep='first')
+            final.to_excel(file_path, index=False)
+        except Exception as e:
+            df_new.to_excel(file_path, index=False)
+    else:
+        df_new.to_excel(file_path, index=False)
+
+if __name__ == "__main__":
+    asyncio.run(extract_details())
