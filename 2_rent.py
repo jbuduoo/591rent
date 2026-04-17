@@ -9,7 +9,6 @@ from sheets_helper import SheetsHelper
 
 # 設定
 CSV_FILE = "pending_urls.csv"
-EXCEL_FILE = "591_rentals.xlsx"
 
 # 重新抓取現有 ID 資料
 RE_SCRAPE_ALL = False 
@@ -248,8 +247,8 @@ async def extract_details():
 
                 if phone not in ["未獲取", "591電話"]:
                     norm_curr = normalize_phone(phone)
-                    if norm_curr in existing_phones: phone = f"{phone}已有"
-                    else: existing_phones.add(norm_curr)
+                    
+                    
 
                 match_cid = re.search(r'/(\d+)', url)
                 curr_cid = match_cid.group(1) if match_cid else "未知"
@@ -266,7 +265,7 @@ async def extract_details():
                 }
                 
                 async with save_lock:
-                    save_single(res, EXCEL_FILE, sheets)
+                    save_single(res, sheets)
                 
                 print(f"[+] Done: {title[:10]} | Price: {price} | Phone: {phone}")
                 await asyncio.sleep(random.uniform(1, 3)) # 縮短延遲
@@ -306,28 +305,12 @@ async def extract_details():
         await asyncio.gather(*tasks)
         await browser.close()
 
-def save_single(item, file_path, sheets=None):
-    # Sync to Google Sheets
+
+def save_single(item, sheets=None):
+    # Only Sync to Google Sheets
     if sheets and sheets.authenticated:
         sheets.sync_data("Rent", item)
 
-    # 仍然保留 Excel 作為本地備份 (或是您可以選擇註解掉下一段)
-    df_new = pd.DataFrame([item])
-    if os.path.exists(file_path):
-        try:
-            df_old = pd.read_excel(file_path)
-            for col in ['Email', 'API電話', '介紹中聯絡資訊', 'LINE連結']:
-                if col in df_old.columns: 
-                    df_old = df_old.drop(columns=[col])
-            
-            df_old['案件ID'] = df_old['案件ID'].astype(str)
-            df_new['案件ID'] = df_new['案件ID'].astype(str)
-            final = pd.concat([df_old, df_new], ignore_index=True).drop_duplicates(subset=['案件ID'], keep='first')
-            final.to_excel(file_path, index=False)
-        except Exception as e:
-            df_new.to_excel(file_path, index=False)
-    else:
-        df_new.to_excel(file_path, index=False)
 
 if __name__ == "__main__":
     asyncio.run(extract_details())

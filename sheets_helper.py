@@ -65,7 +65,7 @@ class SheetsHelper:
 
             # Note: Deduplication based on ID or URL can be added here for performance if needed.
             row_values = [str(val) for val in data_dict.values()]
-            worksheet.append_row(row_values)
+            worksheet.insert_row(row_values, 2)
             return True
         except Exception as e:
             print(f"[!] Sync to Google Sheets failed ({worksheet_name}): {e}")
