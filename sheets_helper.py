@@ -1,6 +1,9 @@
 import gspread
 from google.oauth2.service_account import Credentials
 import os
+import json
+import re
+from datetime import datetime, timedelta
 import pandas as pd
 
 # 設定
@@ -15,54 +18,62 @@ class SheetsHelper:
         self._authenticate()
 
     def _authenticate(self):
-        if not os.path.exists(CREDENTIALS_FILE):
-            print(f"⚠️ 找不到 {CREDENTIALS_FILE}，請參考教學文件設定。")
-            return
-
+        # Priority 1: Check environment variable (for GitHub Actions)
+        env_creds = os.getenv("GCP_CREDENTIALS")
+        
         try:
             scopes = [
                 'https://www.googleapis.com/auth/spreadsheets',
                 'https://www.googleapis.com/auth/drive'
             ]
-            credentials = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+            
+            if env_creds:
+                # Load from JSON string in environment variable
+                creds_dict = json.loads(env_creds)
+                credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+                print("[+] Using credentials from environment variable.")
+            else:
+                # Priority 2: Check local credentials.json
+                if not os.path.exists(CREDENTIALS_FILE):
+                    print(f"[!] Cannot find {CREDENTIALS_FILE} and GCP_CREDENTIALS env var is empty.")
+                    return
+                credentials = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+                print(f"[+] Using credentials from {CREDENTIALS_FILE}.")
+
             self.gc = gspread.authorize(credentials)
             self.sh = self.gc.open_by_key(SHEET_ID)
             self.authenticated = True
         except Exception as e:
-            print(f"❌ Google Sheets 驗證失敗: {e}")
+            print(f"[!] Google Sheets Authentication Failed: {e}")
 
     def sync_data(self, worksheet_name, data_dict):
         """
-        將單筆資料同步至指定的工作表 (租屋或售屋)
+        Sync a single data record to the specified worksheet (Rent or Sale).
         """
         if not self.authenticated:
             return False
 
         try:
-            # 取得或建立工作表
+            # Get or create worksheet
             try:
                 worksheet = self.sh.worksheet(worksheet_name)
             except gspread.exceptions.WorksheetNotFound:
                 worksheet = self.sh.add_worksheet(title=worksheet_name, rows=100, cols=20)
-                # 寫入標頭
+                # Write headers
                 headers = list(data_dict.keys())
                 worksheet.append_row(headers)
 
-            # 檢查是否已有相同 ID (如果是租屋) 或 網址 (如果是售屋)
-            # 讀取現有資料的第一欄位作為 Key (假設 租屋是 案件ID, 售屋是 案件名稱或網址)
-            # 為了效能，我們這裡先簡單使用 append_row
-            # 如果需要去重，可以在這裡增加邏輯
-            
+            # Note: Deduplication based on ID or URL can be added here for performance if needed.
             row_values = [str(val) for val in data_dict.values()]
             worksheet.append_row(row_values)
             return True
         except Exception as e:
-            print(f"❌ 同步至 Google Sheets 失敗 ({worksheet_name}): {e}")
+            print(f"[!] Sync to Google Sheets failed ({worksheet_name}): {e}")
             return False
 
     def get_existing_keys(self, worksheet_name, key_column_index=1):
         """
-        取得現有資料中的 Key (用於去重)
+        Get existing keys from the worksheet (used for deduplication).
         key_column_index: 1-based index
         """
         if not self.authenticated:
@@ -70,14 +81,59 @@ class SheetsHelper:
         try:
             worksheet = self.sh.worksheet(worksheet_name)
             col_values = worksheet.col_values(key_column_index)
-            return set(col_values[1:]) # 排除標頭
+            return set(col_values[1:]) # Skip header
         except:
             return set()
 
+
+    @staticmethod
+    def parse_591_time(time_str):
+        """
+        Parses 591 relative time strings into absolute datetime strings.
+        """
+        if not time_str or not isinstance(time_str, str):
+            return "Unknown"
+            
+        now = datetime.now()
+        time_str = time_str.strip()
+        
+        try:
+            # 1. Relative patterns
+            m = re.search(r'(\d+)\s*(?:分鐘|min)', time_str)
+            if m:
+                return (now - timedelta(minutes=int(m.group(1)))).strftime("%Y-%m-%d %H:%M")
+            
+            m = re.search(r'(\d+)\s*(?:小時|hour)', time_str)
+            if m:
+                return (now - timedelta(hours=int(m.group(1)))).strftime("%Y-%m-%d %H:%M")
+            
+            m = re.search(r'(\d+)\s*(?:天|day)', time_str)
+            if m:
+                return (now - timedelta(days=int(m.group(1)))).strftime("%Y-%m-%d %H:%M")
+            
+            if "昨日" in time_str or "昨天" in time_str:
+                return (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+
+            # 2. Date patterns (Month/Day)
+            m = re.search(r'(\d+)\s*月\s*(\d+)\s*日', time_str)
+            if m:
+                month, day = int(m.group(1)), int(m.group(2))
+                res_date = now.replace(month=month, day=day)
+                if res_date > now:
+                    res_date = res_date.replace(year=now.year - 1)
+                return res_date.strftime("%Y-%m-%d") + " 00:00"
+
+            m = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', time_str)
+            if m:
+                return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d} 00:00"
+            
+            return time_str
+        except Exception as e:
+            return f"Error: {e}"
 if __name__ == "__main__":
-    # 測試程式碼
+    # Test code
     helper = SheetsHelper()
     if helper.authenticated:
-        print("✅ 驗證成功！")
-        test_data = {"測試": "資料", "時間": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}
-        helper.sync_data("測試用", test_data)
+        print("[+] Authentication Successful!")
+        test_data = {"Test": "Data", "Time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}
+        helper.sync_data("TestTab", test_data)

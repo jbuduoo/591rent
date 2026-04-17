@@ -83,7 +83,7 @@ async def extract_from_bg_data(p, s_data):
 
 async def extract_details():
     if not os.path.exists(CSV_FILE):
-        print(f"❌ 找不到 {CSV_FILE}，請先執行 1_fetch_urls.py")
+        print(f"[!] Error: Cannot find {CSV_FILE}, please run 1_fetch_urls.py first.")
         return
 
     try:
@@ -114,17 +114,17 @@ async def extract_details():
                     if norm_p and norm_p not in ["", "591"]:
                         existing_phones.add(norm_p)
             
-            print(f"📖 已讀取現有資料庫，共有 {len(existing_ids)} 筆案件。")
+            print(f"[*] Read existing database, total {len(existing_ids)} cases.")
         except:
             pass
 
-    # --- [新增] 初始化 Google Sheets 輔助類別 ---
+    # --- [New] Initialize Google Sheets Helper ---
     sheets = SheetsHelper()
     if sheets.authenticated:
-        cloud_ids = sheets.get_existing_keys("租屋", key_column_index=1)
+        cloud_ids = sheets.get_existing_keys("Rent", key_column_index=1)
         if cloud_ids:
             existing_ids.update(cloud_ids)
-            print(f"☁️ 已同步 Google Sheets 資料，目前共有 {len(existing_ids)} 筆案件 (含雲端)。")
+            print(f"[#] Synced Google Sheets data, total {len(existing_ids)} cases (including cloud).")
 
     # --- [優化] 併發控制與資源攔截 ---
     sem = asyncio.Semaphore(3)  # 同時處理 3 個分頁
@@ -170,7 +170,7 @@ async def extract_details():
             page.on("response", handle_response)
             
             try:
-                print(f"🔍 [{index}/{total}] 處理中: {url}")
+                print(f"[*] [{index}/{total}] Processing: {url}")
                 await page.goto(url, wait_until="domcontentloaded", timeout=40000)
                 
                 # 等待 API 或特定資料載入 (縮短等待循環)
@@ -192,6 +192,8 @@ async def extract_details():
                 for sel in [".price strong", ".house-price"]:
                     if await page.locator(sel).count() > 0:
                         price = (await page.locator(sel).first.inner_text()).strip()
+                        # [Filter] Remove unwanted text
+                        price = price.replace("買賣租屋風險，重點一次看懂!!", "").strip()
                         break
 
                 # 地址：優先用 API 抓到的，否則再嘗試 DOM
@@ -266,16 +268,16 @@ async def extract_details():
                 async with save_lock:
                     save_single(res, EXCEL_FILE, sheets)
                 
-                print(f"✅ 完成: {title[:10]} | 租金: {price} | 電話: {phone}")
+                print(f"[+] Done: {title[:10]} | Price: {price} | Phone: {phone}")
                 await asyncio.sleep(random.uniform(1, 3)) # 縮短延遲
 
             except Exception as e:
-                print(f"❌ 錯誤 ({url}): {e}")
+                print(f"[!] Error ({url}): {e}")
             finally:
                 await page.close()
 
     async with async_playwright() as p:
-        print(f"💡 啟動瀏覽器中 (背景模式)...")
+        print(f"[*] Starting browser (headless mode)...")
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -290,9 +292,9 @@ async def extract_details():
                 if case_id not in existing_ids or RE_SCRAPE_ALL:
                     urls_to_process.append(u)
         
-        print(f"📊 待處理清單: 總共 {len(all_urls)} 筆，剩餘 {len(urls_to_process)} 筆需處理。")
+        print(f"[*] Pending list: total {len(all_urls)}, remaining {len(urls_to_process)} to process.")
         if not urls_to_process:
-            print("🏁 沒有新案件需要處理。")
+            print("[*] No new cases to process.")
             await browser.close()
             return
 
@@ -305,9 +307,9 @@ async def extract_details():
         await browser.close()
 
 def save_single(item, file_path, sheets=None):
-    # 同步至 Google Sheets (每筆更新)
+    # Sync to Google Sheets
     if sheets and sheets.authenticated:
-        sheets.sync_data("租屋", item)
+        sheets.sync_data("Rent", item)
 
     # 仍然保留 Excel 作為本地備份 (或是您可以選擇註解掉下一段)
     df_new = pd.DataFrame([item])

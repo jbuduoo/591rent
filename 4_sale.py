@@ -14,7 +14,7 @@ DEBUG_FILE = "591_debug_data.txt"
 
 async def extract_sale_details():
     if not os.path.exists(CSV_FILE):
-        print(f"❌ 找不到 {CSV_FILE}")
+        print(f"[!] Error: Cannot find {CSV_FILE}")
         return
 
     try:
@@ -29,18 +29,17 @@ async def extract_sale_details():
             df_old = pd.read_excel(EXCEL_FILE)
             if '網址' in df_old.columns:
                 existing_urls = set(df_old['網址'].astype(str).tolist())
-            print(f"📖 已從 {EXCEL_FILE} 讀取 {len(existing_urls)} 筆已存在的網址。")
+            print(f"📖 Loaded {len(existing_urls)} existing URLs from {EXCEL_FILE}.")
         except: pass
 
-    # --- [新增] 初始化 Google Sheets 輔助類別 ---
+    # --- [New] Initialize Google Sheets Helper ---
     sheets = SheetsHelper()
     if sheets.authenticated:
-        # 假設售屋資料在 Sheets 中的 Key 是 '網址' (通常在第 14 欄，但這裡我們先抓取全部並比對)
-        # 為了簡化，我們先不強製雲端去重，或是您可以根據需要調整 key_column_index
-        cloud_urls = sheets.get_existing_keys("售屋", key_column_index=14) 
+        # Assuming worksheet name is "Sale"
+        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=14) 
         if cloud_urls:
             existing_urls.update(cloud_urls)
-            print(f"☁️ 已同步 Google Sheets 資料，目前共有 {len(existing_urls)} 筆已存在的網址 (含雲端)。")
+            print(f"[#] Synced Google Sheets data, total {len(existing_urls)} existing URLs (including cloud).")
     # ---------------------------------------------
 
     # ---------------------------------------------
@@ -146,6 +145,24 @@ async def extract_sale_details():
                 elif "收取服務費" in str(role) or "收取服務費" in str(owner):
                     print(f"  [-] Agent detected, skipping: {title[:15]}")
                 else:
+                    
+                # Posted Time extraction
+                posted_time_text = "Unknown"
+                if "v1_total" in shared_data:
+                    d = shared_data["v1_total"]
+                    ware = d.get("ware", {}) or {}
+                    # Try to find post time or refresh time in JSON
+                    raw_time = ware.get("posttime") or ware.get("refreshtime") or ware.get("validdate")
+                    if raw_time:
+                        posted_time_text = SheetsHelper.parse_591_time(str(raw_time))
+                
+                # If still unknown, try DOM
+                if posted_time_text == "Unknown":
+                    for sel in [".publish-info", ".update-info", "[class*='publish']"]:
+                        if await page.locator(sel).count() > 0:
+                            txt = (await page.locator(sel).first.inner_text()).strip()
+                            posted_time_text = SheetsHelper.parse_591_time(txt)
+                            break
                     results = {
                         "案件名稱": title, "總價": price, "單價": unit_price,
                         "格局": layout, "坪數": area, "屋齡": age, "樓層": floor,
@@ -183,9 +200,9 @@ async def extract_sale_details():
         await browser.close()
 
 def save_single(item, file_path, sheets=None):
-    # 同步至 Google Sheets (每筆更新)
+    # Sync to Google Sheets
     if sheets and sheets.authenticated:
-        sheets.sync_data("售屋", item)
+        sheets.sync_data("Sale", item)
 
     # 仍然保留 Excel 作為本地備份
     df_new = pd.DataFrame([item])
