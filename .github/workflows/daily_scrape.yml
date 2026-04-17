@@ -36,14 +36,3 @@ jobs:
         GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
       run: |
         python run_all.py
-
-    # Optional: If you want to keep local excel backups in the repo (not recommended for large data)
-    # - name: Commit Excel files
-    #   if: always()
-    #   run: |
-    #     git config --local user.email "action@github.com"
-    #     git config --local user.name "GitHub Action"
-    #     git add *.xlsx
-    #     git commit -m "Update scraped data [skip ci]" || echo "No changes to commit"
-    #     git push
- Riverside

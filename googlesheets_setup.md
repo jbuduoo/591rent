@@ -1,36 +1,33 @@
-# Google Sheets API Setup Guide
+# Google Sheets 雲端同步設定指南
 
-To allow the scraper to write data to your Google Sheets, follow these steps to create a key:
+本爬蟲支援將抓取到的 591 租屋與售屋資料自動同步到 Google Sheets，方便您在任何地方查看。
 
-### Step 1: Create a Google Cloud Project
-1. Go to [Google Cloud Console](https://console.cloud.google.com/).
-2. Click the project selector in the top-left, select **"New Project"**, and name it `591-Scraper`.
-3. In the search bar, search for **"Google Sheets API"** and click **"Enable"**.
-4. Search for **"Google Drive API"** and click **"Enable"**.
+## 設定步驟
 
-### Step 2: Create a Service Account
-1. Go to **"Navigation Menu > APIs & Services > Credentials"**.
-2. Click **"Create Credentials"**, choose **"Service Account"**.
-3. Name it (e.g., `scraper-bot`), and click **"Create and Continue"**.
-4. Select **Role**: `Basic > Editor`, then click **"Done"**.
+### 1. 建立 Google Cloud 專案
+1. 前往 [Google Cloud Console](https://console.cloud.google.com/)。
+2. 建立一個新專案，名稱可取為 `591-Scraper`。
+3. 搜尋並啟用以下兩個 API：
+   - **Google Sheets API**
+   - **Google Drive API**
 
-### Step 3: Generate JSON Key
-1. In the "Service Accounts" list, click the account you just created.
-2. Go to the **"Keys"** tab.
-3. Click **"Add Key > Create New Key"**.
-4. Select **"JSON"**, and click **"Create"**.
-5. **Important:** Download the `.json` file, rename it to `credentials.json`, and place it in the project folder:
-   `c:\Users\wits\Documents\程式專區\01_591_20260325\591租屋_git版\credentials.json`
+### 2. 建立服務帳戶 (Service Account)
+1. 在「API 和服務」中點擊「憑證」。
+2. 點擊「建立憑證」 > 「服務帳戶」。
+3. 完成建立後，在該帳戶的「金鑰」分頁中，點擊「新增金鑰」 > 「建立新金鑰」 > 選擇 **JSON**。
+4. 下載下來的 JSON 檔案請重新命名為 **`credentials.json`**，並放在本專案的根目錄。
 
-### Step 4: Share your Spreadsheet
-1. Open your `credentials.json` file and copy the `"client_email"` (e.g., `scraper-bot@...iam.gserviceaccount.com`).
-2. Go to your [Google Sheets Link](https://docs.google.com/spreadsheets/d/1LPw8RUYU-7qF2oiR1_hBmCdmm-YR5XJUwITRL_Jf_fA/edit?usp=sharing).
-3. Click **"Share"** in the top-right.
-4. Paste the email address, give **"Editor"** permission, and click **"Send"**.
+### 3. 共用試算表
+1. 建立一個新的 Google 試算表，或是打開現有的。
+2. 複製試算表網址中的 ID（在 `/d/` 之後那一串字元）。
+3. 打開 `sheets_helper.py`，將 `SHEET_ID` 修改為您的試算表 ID。
+4. **重要**：點擊試算表右上角的「共用」按鈕，將您的**服務帳戶 Email**（在 `credentials.json` 裡面可以找到）加入為「編輯者」。
 
-### Data Tabs
-The scraper will automatically create or use tabs named **"Rent"** and **"Sale"** (English).
+## 自動化欄位說明
+- **Rent 分頁**：存放租屋資料。
+- **Sale 分頁**：存放售屋資料。
+- 程式會自動偵測標題，若偵測到已存在的「案件ID」，則會跳過重複抓取。
 
 ---
-Once completed, you can run `run_scraper.bat` to start!
- Riverside
+**安全性提示**：`credentials.json` 包含金鑰，請務必妥善保存，切勿將其上傳至公開的 GitHub 倉庫。
+ Riverside 37
