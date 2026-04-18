@@ -2,8 +2,8 @@ name: Daily 591 Scraper
 
 on:
   schedule:
-    # Runs at 00:00 UTC (08:00 Taipei) every day
-    - cron: '0 0 * * *'
+    # Runs at 23:00 and 04:00 UTC (07:00 and 12:00 Taipei) every day
+    - cron: '0 23,4 * * *'
   workflow_dispatch:
     # Allows manual triggering from the Actions tab
 
