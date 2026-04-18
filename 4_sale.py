@@ -80,6 +80,7 @@ async def extract_sale_details():
                 community, owner, phone, address, role = "未知", "未知", "未獲取", "未知", "未知"
 
                 # 1. 優先從 API 拿資料
+                api_address = "未知"
                 if "api_total" in shared_data:
                     d = shared_data["api_total"]
                     house = d.get("houseInfo", d.get("ware", {})) or {}
@@ -93,24 +94,43 @@ async def extract_sale_details():
                         age = f"{house.get('houseage') or house.get('age', '未知')}年"
                         floor = house.get("floor") or floor
                         layout = house.get("layout") or f"{house.get('room',0)}房{house.get('hall',0)}廳"
-                        address = house.get("address") or address
-                    
+                        
+                        # [修復] 地址優化邏輯：組合縣市區域路名，避免直接拿 address (此欄位常誤植為標題)
+                        city = house.get("city_name", "")
+                        town = house.get("town_name", "")
+                        street = house.get("street_name", "")
+                        number = house.get("addr_number", "")
+                        api_address = f"{city}{town}{street}{number}".strip()
+                        
+                        # 備案：如果組合出來太短，才回頭看原本的 address 欄位
+                        if len(api_address) < 5:
+                            api_address = house.get("address") or "未知"
+
                     if contact:
                         owner = contact.get("name") or contact.get("linkman") or owner
                         role = contact.get("roleName") or contact.get("role") or role
                         phone = contact.get("mobile") or contact.get("phone") or phone
 
-                # 2. 如果 API 沒抓到，嘗試 DOM Fallback
+                # 判定地址效力：如果地址與標題完全相同，則視為抓取錯誤 (591 API 常見 Bug)
+                if api_address == title or api_address == "未知":
+                    address = "未知"
+                else:
+                    address = api_address
+
+                # 2. 如果 API 沒抓到或地址有誤，嘗試 DOM Fallback
                 if price == "未知":
                     for sel in [".info-price-num", ".house-price"]:
                         if await page.locator(sel).count() > 0:
                             price = (await page.locator(sel).first.inner_text()).strip()
                             break
                 if address == "未知":
-                    for sel in [".info-addr-value", ".house-addr", ".address", ".detail-address"]:
+                    for sel in [".info-addr-value", "a.info-addr-tip", ".house-addr", ".address", ".detail-address"]:
                         if await page.locator(sel).count() > 0:
                             address = (await page.locator(sel).first.inner_text()).strip()
-                            break
+                            if address != title: # 再次確認不是標題
+                                break
+                            else:
+                                address = "未知"
 
                 # 3. 處理過濾與儲存
                 # [A] 排除失效頁面
