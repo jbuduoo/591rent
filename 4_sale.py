@@ -9,7 +9,6 @@ from sheets_helper import SheetsHelper
 
 # 設定
 CSV_FILE = "pending_sale_urls.csv"
-DEBUG_FILE = "591_debug_data.txt"
 
 async def extract_sale_details():
     if not os.path.exists(CSV_FILE):
@@ -21,28 +20,25 @@ async def extract_sale_details():
     except: return
     if len(df_pending) == 0: return
 
-    
     # --- [優化] 只從 Google Sheets 同步已有的網址 ---
     existing_urls = set()
     sheets = SheetsHelper()
     if sheets.authenticated:
-        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=14)
+        # URL is at col 12 for Sale in latest structure
+        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=12)
         if cloud_urls:
             existing_urls = set(cloud_urls)
             print(f"[#] Synced Google Sheets data, total {len(existing_urls)} existing URLs.")
 
-
-    # ---------------------------------------------
     # --- [優化] 併發控制與資源攔截 ---
-    sem = asyncio.Semaphore(3)  # 同時處理 3 個分頁
-    save_lock = asyncio.Lock()  # 避免同時寫入 Excel
+    sem = asyncio.Semaphore(3)
+    save_lock = asyncio.Lock()
 
     async def fetch_one(context, url, index, total):
         async with sem:
             shared_data = {}
             page = await context.new_page()
 
-            # [核心優化] 資源攔截
             async def block_resources(route):
                 if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
                     await route.abort()
@@ -52,22 +48,17 @@ async def extract_sale_details():
 
             async def handle_response(response):
                 url_res = response.url
-                # [偵測] 只抓取包含核心數據的 API，排除推薦/廣告類
                 if "recommend" in url_res or "stat" in url_res or "tracker" in url_res:
                     return
-
                 if "/v1/web/sale/detail" in url_res or "/v2/info" in url_res or "/v2/linkInfo" in url_res:
                     if response.status == 200:
                         try:
                             res = await response.json()
                             if isinstance(res, dict):
                                 data = res.get("data") if res.get("data") else res
-                                if "/v2/info" in url_res:
-                                    shared_data["v2_info"] = data
-                                elif "/v2/linkInfo" in url_res:
-                                    shared_data["v2_link"] = data
-                                elif "/v1/web/sale/detail" in url_res:
-                                    shared_data["v1_total"] = data
+                                if "/v2/info" in url_res: shared_data["v2_info"] = data
+                                elif "/v2/linkInfo" in url_res: shared_data["v2_link"] = data
+                                elif "/v1/web/sale/detail" in url_res: shared_data["v1_total"] = data
                         except: pass
             
             page.on("response", handle_response)
@@ -76,45 +67,38 @@ async def extract_sale_details():
                 print(f"[*] [{index}/{total}] Processing: {url}")
                 await page.goto(url, wait_until="domcontentloaded", timeout=50000)
                 
-                # 等待基礎資料到達
                 for _ in range(20):
                     if shared_data: break
                     await asyncio.sleep(0.5)
-                await asyncio.sleep(2) # 多留點時間給非同步請求
+                await asyncio.sleep(1)
 
                 title = (await page.title()).replace(" - 591售屋網", "").replace("591房屋交易網--", "").strip()
                 price, unit_price = "未知", "未知"
                 layout, area, age, floor = "未知", "未知", "未知", "未知"
                 community, owner, phone, address, email, role = "未知", "未知", "未獲取", "未知", "無", "未知"
 
-                # 優先從 v1_total (最完整的結構) 拿資料
                 if "v1_total" in shared_data:
                     d = shared_data["v1_total"]
                     ware = d.get("ware", {})
                     info_attr = d.get("info", {})
                     link = d.get("linkInfo", {})
-                    
                     if ware:
                         price = f"{ware.get('price', '未知')}萬"
                         area = f"{ware.get('area', '未知')}坪"
                         community = ware.get("c_name", community)
                         owner = ware.get("linkman", owner)
                         phone = ware.get("mobile", phone)
-                        email = ware.get("email", email)
                         unit_price = ware.get("perprice", unit_price)
-                    
                     if info_attr:
                         layout = info_attr.get('1', {}).get('Layout', {}).get('value', layout)
                         age = info_attr.get('1', {}).get('HouseAge', {}).get('value', age)
                         floor = info_attr.get('2', {}).get('Floor', {}).get('value', floor)
                         address = info_attr.get('2', {}).get('zAddress', {}).get('value', address)
-                    
                     if link:
                         owner = link.get("linkman") or link.get("name") or owner
                         role = link.get("roleName", role)
                         phone = link.get("mobile") or link.get("ware_mobile") or phone
 
-                # 如果 v1 沒拿到，嘗試從 v2 補完
                 if "v2_info" in shared_data:
                     info = shared_data["v2_info"].get("houseInfo", {})
                     if info:
@@ -135,17 +119,12 @@ async def extract_sale_details():
                 elif "收取服務費" in str(role) or "收取服務費" in str(owner):
                     print(f"  [-] Agent detected, skipping: {title[:15]}")
                 else:
-                    # Posted Time extraction
                     posted_time_text = "Unknown"
                     if "v1_total" in shared_data:
                         d = shared_data["v1_total"]
                         ware = d.get("ware", {}) or {}
-                        # Try to find post time or refresh time in JSON
                         raw_time = ware.get("posttime") or ware.get("refreshtime") or ware.get("validdate")
-                        if raw_time:
-                            posted_time_text = SheetsHelper.parse_591_time(str(raw_time))
-                    
-                    # If still unknown, try DOM
+                        if raw_time: posted_time_text = SheetsHelper.parse_591_time(str(raw_time))
                     if posted_time_text == "Unknown":
                         for sel in [".publish-info", ".update-info", "[class*='publish']"]:
                             if await page.locator(sel).count() > 0:
@@ -177,25 +156,16 @@ async def extract_sale_details():
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         )
-
         urls_all = df_pending["url"].tolist()
         urls_to_process = [u for u in urls_all if str(u) not in existing_urls]
-        
         print(f"Pending list: Total {len(urls_all)}, To scrape {len(urls_to_process)}.")
-        
-        tasks = []
-        for i, url in enumerate(urls_to_process):
-            tasks.append(fetch_one(context, url, i + 1, len(urls_to_process)))
-        
+        tasks = [fetch_one(context, url, i + 1, len(urls_to_process)) for i, url in enumerate(urls_to_process)]
         await asyncio.gather(*tasks)
         await browser.close()
 
-
 def save_single(item, sheets=None):
-    # Only Sync to Google Sheets
     if sheets and sheets.authenticated:
         sheets.sync_data("Sale", item)
-
 
 if __name__ == "__main__":
     asyncio.run(extract_sale_details())
