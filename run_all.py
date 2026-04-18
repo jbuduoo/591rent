@@ -24,23 +24,18 @@ if __name__ == "__main__":
 
     try:
         # Step 1-2: 591 Rent
-        run_script("1_rent.py", "Step 1/6: 591 Rent URL Collection")
-        run_script("2_rent.py", "Step 2/6: 591 Rent Details Extraction")
+        run_script("1_rent.py", "Step 1/4: 591 Rent URL Collection")
+        run_script("2_rent.py", "Step 2/4: 591 Rent Details Extraction")
         
         # Step 3-4: 591 Sale
-        run_script("3_sale.py", "Step 3/6: 591 Sale URL Collection")
-        run_script("4_sale.py", "Step 4/6: 591 Sale Details Extraction")
-        
-        # Step 5-6: Rakuya Rent
-        run_script("5_rakuya_rent.py", "Step 5/6: Rakuya Rent URL Collection")
-        run_script("6_rakuya_rent_detail.py", "Step 6/6: Rakuya Rent Details Extraction")
+        run_script("3_sale.py", "Step 3/4: 591 Sale URL Collection")
+        run_script("4_sale.py", "Step 4/4: 591 Sale Details Extraction")
 
         print(f"\n{'='*52}")
         print("  [Finished] All tasks completed!")
         print("  Data synced to Google Sheets:")
         print("    - Worksheet: Rent (591)")
         print("    - Worksheet: Sale (591)")
-        print("    - Worksheet: Rakuya_Rent")
         print(f"{'='*52}\n")
     
     except KeyboardInterrupt:
