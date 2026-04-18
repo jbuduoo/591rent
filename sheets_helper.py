@@ -65,7 +65,13 @@ class SheetsHelper:
 
             # Note: Deduplication based on ID or URL can be added here for performance if needed.
             row_values = [str(val) for val in data_dict.values()]
-            worksheet.insert_row(row_values, 2)
+            
+            # If the sheet is empty (only header), grid size is 1. insert_row(..., 2) fails.
+            # We use append_row for the first entry to expand the grid.
+            if worksheet.row_count < 2:
+                worksheet.append_row(row_values)
+            else:
+                worksheet.insert_row(row_values, 2)
             return True
         except Exception as e:
             print(f"[!] Sync to Google Sheets failed ({worksheet_name}): {e}")
