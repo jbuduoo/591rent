@@ -24,14 +24,14 @@ async def extract_sale_details():
     existing_urls = set()
     sheets = SheetsHelper()
     if sheets.authenticated:
-        # URL is at col 12 for Sale in latest structure
-        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=12)
+        # URL is at col 12 for Sale 
+        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=14)
         if cloud_urls:
             existing_urls = set(cloud_urls)
             print(f"[#] Synced Google Sheets data, total {len(existing_urls)} existing URLs.")
 
     # --- [優化] 併發控制與資源攔截 ---
-    sem = asyncio.Semaphore(3)
+    sem = asyncio.Semaphore(2) # 減少併發以提高穩定性
     save_lock = asyncio.Lock()
 
     async def fetch_one(context, url, index, total):
@@ -48,101 +48,98 @@ async def extract_sale_details():
 
             async def handle_response(response):
                 url_res = response.url
-                if "recommend" in url_res or "stat" in url_res or "tracker" in url_res:
-                    return
-                if "/v1/web/sale/detail" in url_res or "/v2/info" in url_res or "/v2/linkInfo" in url_res:
+                if "/v1/web/sale/detail" in url_res or "/v2/info" in url_res:
                     if response.status == 200:
                         try:
                             res = await response.json()
                             if isinstance(res, dict):
                                 data = res.get("data") if res.get("data") else res
-                                if "/v2/info" in url_res: shared_data["v2_info"] = data
-                                elif "/v2/linkInfo" in url_res: shared_data["v2_link"] = data
-                                elif "/v1/web/sale/detail" in url_res: shared_data["v1_total"] = data
+                                shared_data["api_total"] = data
                         except: pass
             
             page.on("response", handle_response)
 
             try:
                 print(f"[*] [{index}/{total}] Processing: {url}")
-                await page.goto(url, wait_until="domcontentloaded", timeout=50000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 
-                for _ in range(20):
-                    if shared_data: break
+                # 等待資料到達
+                for _ in range(15):
+                    if "api_total" in shared_data: break
                     await asyncio.sleep(0.5)
-                await asyncio.sleep(1)
+                await asyncio.sleep(1.5)
 
                 title = (await page.title()).replace(" - 591售屋網", "").replace("591房屋交易網--", "").strip()
                 price, unit_price = "未知", "未知"
                 layout, area, age, floor = "未知", "未知", "未知", "未知"
-                community, owner, phone, address, email, role = "未知", "未知", "未獲取", "未知", "無", "未知"
+                community, owner, phone, address, role = "未知", "未知", "未獲取", "未知", "未知"
 
-                if "v1_total" in shared_data:
-                    d = shared_data["v1_total"]
-                    ware = d.get("ware", {})
-                    info_attr = d.get("info", {})
-                    link = d.get("linkInfo", {})
-                    if ware:
-                        price = f"{ware.get('price', '未知')}萬"
-                        area = f"{ware.get('area', '未知')}坪"
-                        community = ware.get("c_name", community)
-                        owner = ware.get("linkman", owner)
-                        phone = ware.get("mobile", phone)
-                        unit_price = ware.get("perprice", unit_price)
-                    if info_attr:
-                        layout = info_attr.get('1', {}).get('Layout', {}).get('value', layout)
-                        age = info_attr.get('1', {}).get('HouseAge', {}).get('value', age)
-                        floor = info_attr.get('2', {}).get('Floor', {}).get('value', floor)
-                        address = info_attr.get('2', {}).get('zAddress', {}).get('value', address)
-                    if link:
-                        owner = link.get("linkman") or link.get("name") or owner
-                        role = link.get("roleName", role)
-                        phone = link.get("mobile") or link.get("ware_mobile") or phone
-
-                if "v2_info" in shared_data:
-                    info = shared_data["v2_info"].get("houseInfo", {})
-                    if info:
-                        price = f"{info.get('totalPrice', info.get('price', price))}萬"
-                        area = f"{info.get('area', area)}坪"
-                        community = info.get("community_name") or info.get("communityName") or community
-                        age = f"{info.get('houseage', '未知')}年"
-                        layout = f"{info.get('room',0)}房{info.get('hall',0)}廳" if info.get('room') else info.get('layout', layout)
-
-                if "v2_link" in shared_data:
-                    link = shared_data["v2_link"]
-                    owner = link.get("name", owner)
-                    role = link.get("roleName", role)
-                    phone = link.get("mobile", phone)
-
-                if "頁面不存在" in title or title == "對不起，" or "物件已下架" in title:
-                    print(f"  [!] Detected dead page: {url}")
-                elif "收取服務費" in str(role) or "收取服務費" in str(owner):
-                    print(f"  [-] Agent detected, skipping: {title[:15]}")
-                else:
-                    posted_time_text = "Unknown"
-                    if "v1_total" in shared_data:
-                        d = shared_data["v1_total"]
-                        ware = d.get("ware", {}) or {}
-                        raw_time = ware.get("posttime") or ware.get("refreshtime") or ware.get("validdate")
-                        if raw_time: posted_time_text = SheetsHelper.parse_591_time(str(raw_time))
-                    if posted_time_text == "Unknown":
-                        for sel in [".publish-info", ".update-info", "[class*='publish']"]:
-                            if await page.locator(sel).count() > 0:
-                                txt = (await page.locator(sel).first.inner_text()).strip()
-                                posted_time_text = SheetsHelper.parse_591_time(txt)
-                                break
+                # 1. 優先從 API (api_total) 拿資料
+                if "api_total" in shared_data:
+                    d = shared_data["api_total"]
+                    # 591 Sale API 結構通常有 houseInfo 跟 contactInfo
+                    house = d.get("houseInfo", d.get("ware", {})) or {}
+                    contact = d.get("contactInfo", d.get("linkInfo", {})) or {}
+                    breadcrumb = d.get("breadcrumb", []) # 用來補地址
                     
-                    results = {
-                        "案件名稱": title, "總價": price, "單價": unit_price,
-                        "格局": layout, "坪數": area, "屋齡": age, "樓層": floor,
-                        "社區": community, "地址": address, "屋主/聯絡人": owner,
-                        "身分": role, "電話": phone, "網址": url,
-                        "發佈時間": posted_time_text,
-                        "抓取時間": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-                    }
-                    async with save_lock:
-                        save_single(results, sheets)
-                    print(f"  [+] Success: {title[:15]} | Price: {price} | Phone: {phone}")
+                    if house:
+                        price = f"{house.get('price', '未知')}萬"
+                        unit_price = house.get("perPrice") or house.get("perprice") or unit_price
+                        area = f"{house.get('area', '未知')}坪"
+                        community = house.get("communityName") or house.get("c_name") or community
+                        age = f"{house.get('houseage') or house.get('age', '未知')}年"
+                        floor = house.get("floor") or floor
+                        layout = house.get("layout") or f"{house.get('room',0)}房{house.get('hall',0)}廳"
+                        address = house.get("address") or address
+                    
+                    if contact:
+                        owner = contact.get("name") or contact.get("linkman") or owner
+                        role = contact.get("roleName") or contact.get("role") or role
+                        phone = contact.get("mobile") or contact.get("phone") or phone
+
+                # 2. 如果 API 沒抓到，嘗試 DOM Fallback
+                if price == "未知":
+                    for sel in [".info-price-num", ".house-price"]:
+                        if await page.locator(sel).count() > 0:
+                            price = (await page.locator(sel).first.inner_text()).strip()
+                            break
+                
+                if area == "未知":
+                    for sel in [".info-floor-key:has-text('坪數') + .info-floor-value", ".house-info span:has-text('坪')"]:
+                        if await page.locator(sel).count() > 0:
+                            area = (await page.locator(sel).first.inner_text()).strip()
+                            break
+
+                # 3. Posted Time extraction
+                posted_time_text = "Unknown"
+                if "api_total" in shared_data:
+                    house = shared_data["api_total"].get("houseInfo", {})
+                    raw_time = house.get("posttime") or house.get("refreshtime")
+                    if raw_time:
+                        posted_time_text = SheetsHelper.parse_591_time(str(raw_time))
+                
+                if posted_time_text == "Unknown":
+                    # 鎖定在詳細資訊區塊，避免抓到 Header 的「會員中心」
+                    # 591 售屋詳細頁面的發佈日期通常在 class="publish-info" 或特定 span
+                    for sel in [".publish-info", ".update-info", ".house-index span:has-text('更新')"]:
+                        container = page.locator(".detail-info-box") if await page.locator(".detail-info-box").count() > 0 else page
+                        if await container.locator(sel).count() > 0:
+                            txt = (await container.locator(sel).first.inner_text()).strip()
+                            posted_time_text = SheetsHelper.parse_591_time(txt)
+                            break
+                
+                results = {
+                    "案件名稱": title, "總價": price, "單價": unit_price,
+                    "格局": layout, "坪數": area, "屋齡": age, "樓層": floor,
+                    "社區": community, "地址": address, "屋主/聯絡人": owner,
+                    "身分": role, "電話": phone, "網址": url,
+                    "發佈時間": posted_time_text,
+                    "抓取時間": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+                }
+                
+                async with save_lock:
+                    save_single(results, sheets)
+                print(f"  [+] Success: {title[:15]} | Price: {price} | Time: {posted_time_text}")
                 
                 await asyncio.sleep(random.uniform(1, 2))
             except Exception as e:
