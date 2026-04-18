@@ -242,6 +242,8 @@ async def extract_details():
                     save_single(res, sheets)
                 
                 print(f"[+] Done: {title[:10]} | Price: {price} | Phone: {phone}")
+                # Riverside
+               
                 await asyncio.sleep(random.uniform(1, 3))
 
             except Exception as e:

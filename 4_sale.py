@@ -10,6 +10,11 @@ from sheets_helper import SheetsHelper
 # 設定
 CSV_FILE = "pending_sale_urls.csv"
 
+# 房仲/代理人關鍵字 (身分)
+AGENT_KEYWORDS = ["仲介", "收取服務費", "代理人", "永慶", "信義", "住商", "中信", "東森"]
+# 房仲常用標題關鍵字 (如果資料不全則過濾)
+SPAM_TITLE_KEYWORDS = ["推薦", "秒殺", "必看", "歡迎看屋", "搶手"]
+
 async def extract_sale_details():
     if not os.path.exists(CSV_FILE):
         print(f"[!] Error: Cannot find {CSV_FILE}")
@@ -63,10 +68,11 @@ async def extract_sale_details():
                 print(f"[*] [{index}/{total}] Processing: {url}")
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 
-                for _ in range(15):
+                # 等待資料到達
+                for _ in range(20):
                     if "api_total" in shared_data: break
                     await asyncio.sleep(0.5)
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2)
 
                 title = (await page.title()).replace(" - 591售屋網", "").replace("591房屋交易網--", "").strip()
                 price, unit_price = "未知", "未知"
@@ -80,14 +86,13 @@ async def extract_sale_details():
                     contact = d.get("contactInfo", d.get("linkInfo", {})) or {}
                     
                     if house:
-                        price = f"{house.get('price', '未知')}萬"
+                        price = f"{house.get('price', '未知')}萬" if house.get('price') else price
                         unit_price = house.get("perPrice") or house.get("perprice") or unit_price
-                        area = f"{house.get('area', '未知')}坪"
+                        area = f"{house.get('area', '未知')}坪" if house.get('area') else area
                         community = house.get("communityName") or house.get("c_name") or community
                         age = f"{house.get('houseage') or house.get('age', '未知')}年"
                         floor = house.get("floor") or floor
                         layout = house.get("layout") or f"{house.get('room',0)}房{house.get('hall',0)}廳"
-                        # [修正] 優先使用 API 中的完整地址欄位
                         address = house.get("address") or address
                     
                     if contact:
@@ -108,11 +113,18 @@ async def extract_sale_details():
                             break
 
                 # 3. 處理過濾與儲存
-                if "頁面不存在" in title or title == "對不起，" or "物件已下架" in title:
-                    print(f"  [!] Detected dead page: {url}")
-                # [過濾] 排除仲介身份
-                elif "收取服務費" in str(role) or "收取服務費" in str(owner) or "（仲介，收取服務費）" in str(role):
-                    print(f"  [-] Agent detected, skipping: {title[:15]}")
+                # [A] 排除失效頁面
+                if "頁面不存在" in title or "對不起" in title or "物件已下架" in title or "不存在" in title:
+                    print(f"  [!] Detected dead page, skipping: {url}")
+                # [B] 排除房仲/代理人 (更嚴格)
+                elif any(kw in str(role) for kw in AGENT_KEYWORDS) or any(kw in str(owner) for kw in AGENT_KEYWORDS):
+                    print(f"  [-] Agent detected ({role}), skipping: {title[:15]}")
+                # [C] 排除身分不明且標題含房仲術語的案子
+                elif (role == "未知" or role == "代理人") and any(kw in title for kw in SPAM_TITLE_KEYWORDS):
+                    print(f"  [-] Suspected agent title, skipping: {title[:15]}")
+                # [D] 排除資料不全的物件 (重要欄位任一為未知則刪除)
+                elif price == "未知" or address == "未知" or phone == "未獲取" or address == "":
+                    print(f"  [-] Data incomplete (Price:{price}/Addr:{address}/Phone:{phone}), skipping.")
                 else:
                     posted_time_text = "Unknown"
                     if "api_total" in shared_data:
@@ -155,6 +167,7 @@ async def extract_sale_details():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         )
         urls_all = df_pending["url"].tolist()
+        # [優化] 如果是失敗資料產生的 Unknown，下次還是要重新抓取
         urls_to_process = [u for u in urls_all if str(u) not in existing_urls]
         print(f"Pending list: Total {len(urls_all)}, To scrape {len(urls_to_process)}.")
         tasks = [fetch_one(context, url, i + 1, len(urls_to_process)) for i, url in enumerate(urls_to_process)]
