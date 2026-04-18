@@ -25,7 +25,7 @@ async def extract_sale_details():
     sheets = SheetsHelper()
     if sheets.authenticated:
         # URL is at col 12 for Sale 
-        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=14)
+        cloud_urls = sheets.get_existing_keys("Sale", key_column_index=13)
         if cloud_urls:
             existing_urls = set(cloud_urls)
             print(f"[#] Synced Google Sheets data, total {len(existing_urls)} existing URLs.")
