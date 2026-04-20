@@ -153,8 +153,16 @@ async def extract_sale_details():
                 # [A] 排除失效頁面
                 if "頁面不存在" in title or "對不起" in title or "物件已下架" in title or "不存在" in title:
                     print(f"  [!] Detected dead page, skipping: {url}")
-                # [B] 排除房仲/代理人 (更嚴格)
-                elif any(kw in str(role) for kw in AGENT_KEYWORDS) or any(kw in str(owner) for kw in AGENT_KEYWORDS):
+                # [B] 排除房仲/代理人 (更嚴格，但排除「仲介勿擾」的誤判)
+                role_str = str(role)
+                owner_str = str(owner)
+                is_agent = any(kw in role_str for kw in AGENT_KEYWORDS) or any(kw in owner_str for kw in AGENT_KEYWORDS)
+                
+                # 特殊判斷：如果是「屋主」或包含「仲介勿擾」，則視為非房仲
+                if "屋主" in role_str or "仲介勿擾" in role_str:
+                    is_agent = False
+                
+                if is_agent:
                     print(f"  [-] Agent detected ({role}), skipping: {title[:15]}")
                 # [C] 排除身分不明且標題含房仲術語的案子
                 elif (role == "未知" or role == "代理人") and any(kw in title for kw in SPAM_TITLE_KEYWORDS):
