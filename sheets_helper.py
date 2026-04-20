@@ -96,8 +96,23 @@ class SheetsHelper:
     def parse_591_time(time_str):
         """
         Parses 591 relative time strings into absolute datetime strings.
+        Supports:
+        - Relative strings: "X 分鐘", "X 小時", "X 天", "昨日"
+        - Date strings: "M 月 D 日", "YYYY-MM-DD"
+        - Unix timestamps: 1775798370 (int or numeric string)
         """
-        if not time_str or not isinstance(time_str, str):
+        if not time_str:
+            return "Unknown"
+            
+        # Handle Unix Timestamps (10 digits usually)
+        try:
+            val = int(float(str(time_str).strip()))
+            if 1000000000 < val < 3000000000: # Simple valid range check
+                return datetime.fromtimestamp(val).strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            pass
+
+        if not isinstance(time_str, str):
             return "Unknown"
             
         now = datetime.now()

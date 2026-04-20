@@ -85,6 +85,8 @@ async def extract_sale_details():
                     d = shared_data["api_total"]
                     house = d.get("houseInfo", d.get("ware", {})) or {}
                     contact = d.get("contactInfo", d.get("linkInfo", {})) or {}
+                    info = d.get("info", {})
+                    bread = d.get("bread", {})
                     
                     if house:
                         price = f"{house.get('price', '未知')}萬" if house.get('price') else price
@@ -95,14 +97,29 @@ async def extract_sale_details():
                         floor = house.get("floor") or floor
                         layout = house.get("layout") or f"{house.get('room',0)}房{house.get('hall',0)}廳"
                         
-                        # [修復] 地址優化邏輯：組合縣市區域路名，避免直接拿 address (此欄位常誤植為標題)
-                        city = house.get("city_name", "")
-                        town = house.get("town_name", "")
-                        street = house.get("street_name", "")
-                        number = house.get("addr_number", "")
-                        api_address = f"{city}{town}{street}{number}".strip()
+                        # [修復] 地址最優邏輯：優先從 info -> zAddress 拿完整地址
+                        # Sale API 的 info 通常是字串鍵值 "2", 裡面的 zAddress 欄位最準確
+                        g2 = info.get("2") or info.get(2) or {}
+                        if isinstance(g2, dict):
+                            api_address = g2.get("zAddress", {}).get("value") or "未知"
+
+                        # 備案 1：如果 zAddress 拿不到，從麵包屑 (bread) 組合
+                        if api_address == "未知" and bread:
+                            b_city = bread.get("region", {}).get("name", "")
+                            b_town = bread.get("section", {}).get("name", "")
+                            b_street = house.get("street_name", "")
+                            b_num = house.get("addr_number", "")
+                            api_address = f"{b_city}{b_town}{b_street}{b_num}".strip()
+
+                        # 備案 2：如果還是不行，從 houseInfo 原本的 city/town 欄位組合
+                        if len(api_address) < 5:
+                            city = house.get("city_name", "")
+                            town = house.get("town_name", "")
+                            street = house.get("street_name", "")
+                            number = house.get("addr_number", "")
+                            api_address = f"{city}{town}{street}{number}".strip()
                         
-                        # 備案：如果組合出來太短，才回頭看原本的 address 欄位
+                        # 備案 3：最後才直接看 address (此欄位常誤植為標題)
                         if len(api_address) < 5:
                             api_address = house.get("address") or "未知"
 
@@ -148,12 +165,16 @@ async def extract_sale_details():
                 else:
                     posted_time_text = "Unknown"
                     if "api_total" in shared_data:
-                        house = shared_data["api_total"].get("houseInfo", {})
-                        raw_time = house.get("posttime") or house.get("refreshtime")
+                        d = shared_data["api_total"]
+                        # 同時考慮 houseInfo 與 ware
+                        house_data = d.get("houseInfo", d.get("ware", {})) or {}
+                        # 優先抓 posttime (刊登時間)，其次 refreshtime (重新載入/更新時間)
+                        raw_time = house_data.get("posttime") or house_data.get("refreshtime")
                         if raw_time:
-                            posted_time_text = SheetsHelper.parse_591_time(str(raw_time))
+                            posted_time_text = SheetsHelper.parse_591_time(raw_time)
                     
                     if posted_time_text == "Unknown":
+                        # 備案：嘗試從 DOM 拿文字
                         for sel in [".publish-info", ".update-info"]:
                             container = page.locator(".detail-info-box") if await page.locator(".detail-info-box").count() > 0 else page
                             if await container.locator(sel).count() > 0:
