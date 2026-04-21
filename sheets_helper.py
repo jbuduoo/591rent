@@ -3,7 +3,7 @@ from google.oauth2.service_account import Credentials
 import os
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 # 設定
@@ -115,7 +115,8 @@ class SheetsHelper:
         if not isinstance(time_str, str):
             return "Unknown"
             
-        now = datetime.now()
+        # Get Taiwan Time (UTC+8)
+        now = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
         time_str = time_str.strip()
         
         try:

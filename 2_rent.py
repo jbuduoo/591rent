@@ -5,6 +5,7 @@ import random
 import re
 import json
 from playwright.async_api import async_playwright
+from datetime import datetime, timedelta, timezone
 from sheets_helper import SheetsHelper
 
 # 設定
@@ -235,7 +236,7 @@ async def extract_details():
                     "電話": phone,
                     "網址": url,
                     "發佈時間": posted_time_text,
-                    "抓取時間": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+                    "抓取時間": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
                 }
                 
                 async with save_lock:
