@@ -28,14 +28,15 @@ async def fetch_sale_urls(pages=8): # Set a larger range, rely on auto-stop to f
         )
         page = await context.new_page()
 
-        # Enter initial page
-        print(f"[*] Entering initial URL: {TARGET_URL}")
-        await page.goto(TARGET_URL, wait_until="load", timeout=90000)
-        await asyncio.sleep(5)
 
         for p_idx in range(pages):
+            first_row = p_idx * 30
+            current_url = f"{TARGET_URL}&firstRow={first_row}"
             try:
-                print(f"\n[#] [Page {p_idx + 1}] Loading and scanning content...")
+                print(f"\n[#] [Page {p_idx + 1}] Loading: {current_url}")
+                await page.goto(current_url, wait_until="load", timeout=90000)
+                await asyncio.sleep(5)
+                print(f"[*] Scanning content...")
                 
                 # Human-like scrolling
                 for _ in range(6):
@@ -76,17 +77,8 @@ async def fetch_sale_urls(pages=8): # Set a larger range, rely on auto-stop to f
                     print(f"[Finish] No new items found on this page, ending task early.")
                     break
 
-                # Try clicking "Next"
-                if p_idx < pages - 1:
-                    next_btn = page.locator("a.pageNext, .pageNext, .page-next, a:has-text('Next')").first
-                    if await next_btn.is_visible():
-                        print(f"[*] Clicking 'Next' to load more...")
-                        await next_btn.scroll_into_view_if_needed()
-                        await next_btn.click()
-                        await asyncio.sleep(8)
-                    else:
-                        print(f"[Finish] No 'Next' button found, ending task.")
-                        break
+                # Wait before next page
+                await asyncio.sleep(random.uniform(2, 5))
                 
             except Exception as e:
                 print(f"[!] Error occurred: {e}")
