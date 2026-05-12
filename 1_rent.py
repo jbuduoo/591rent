@@ -3,7 +3,12 @@ import pandas as pd
 import os
 import re
 import random
+import sys
 from playwright.async_api import async_playwright
+
+# Force UTF-8 encoding for Windows console to support Emojis
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # 設定
 TARGET_URLS = [
@@ -43,9 +48,12 @@ async def fetch_urls(pages=10):
                     await page.goto(current_page_url, wait_until="networkidle", timeout=60000)
                     await asyncio.sleep(5)
                     
-                    # Scroll to ensure content loads
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight/2)")
-                    await asyncio.sleep(2)
+                    # Scroll to ensure content loads (improved)
+                    for _ in range(3):
+                        await page.mouse.wheel(0, 1500)
+                        await asyncio.sleep(1.5)
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(3)
 
                     links = await page.locator("a.link").all()
                     page_found_count = 0

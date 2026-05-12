@@ -2,17 +2,25 @@ import subprocess
 import sys
 import os
 
+# Force UTF-8 encoding for Windows console
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+
 def run_script(script_name, description):
     print(f"\n{'='*52}")
     print(f"  >>> {description}")
     print(f"{'='*52}\n")
     
-    result = subprocess.run([sys.executable, script_name], check=False)
+    # Ensure subprocesses also use UTF-8 where possible
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    
+    result = subprocess.run([sys.executable, script_name], check=False, env=env)
     
     if result.returncode == 0:
         print(f"\n  [OK] {description} - Done!")
     else:
-        print(f"\n  [ERROR] {description} - Failed.")
+        print(f"\n  [ERROR] {description} - Failed (Exit Code: {result.returncode}).")
         # Only wait for input if NOT running in GitHub Actions
         if not os.getenv("GITHUB_ACTIONS"):
             input("\n  請按 Enter 鍵結束，並將畫面截圖給技術人員...")
@@ -34,8 +42,8 @@ if __name__ == "__main__":
         print(f"\n{'='*52}")
         print("  [Finished] All tasks completed!")
         print("  Data synced to Google Sheets:")
-        print("    - Worksheet: Rent (591)")
-        print("    - Worksheet: Sale (591)")
+        print("    - Worksheet: Rent")
+        print("    - Worksheet: Sale")
         print(f"{'='*52}\n")
     
     except KeyboardInterrupt:

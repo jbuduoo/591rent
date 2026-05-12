@@ -4,9 +4,14 @@ import os
 import random
 import re
 import json
+import sys
 from playwright.async_api import async_playwright
 from datetime import datetime, timedelta, timezone
 from sheets_helper import SheetsHelper
+
+# Force UTF-8 encoding for Windows console to support Emojis
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # 設定
 CSV_FILE = "pending_sale_urls.csv"

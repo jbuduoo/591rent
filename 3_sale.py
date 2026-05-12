@@ -2,9 +2,15 @@ import asyncio
 import os
 import re
 import random
+import sys
 from playwright.async_api import async_playwright
 
+# Force UTF-8 encoding for Windows console to support Emojis
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # Sale settings
+# Note: Root path /? is required for Sale list on desktop version
 TARGET_URL = "https://sale.591.com.tw/?regionid=3&section=38,37&shType=host"
 CSV_FILE = "pending_sale_urls.csv"
 PAGE_LOG = "3_sale_page_log.txt"
@@ -58,14 +64,20 @@ async def fetch_sale_urls(pages=8): # Set a larger range, rely on auto-stop to f
                     for link in links:
                         url = await link.get_attribute("href")
                         if not url: continue
+                        
+                        # Use more robust regex to catch different 591 sale URL patterns
                         match = re.search(r'detail/(?:2/)?(\d+)', url)
                         if match:
                             case_id = match.group(1)
-                            full_url = f"https://sale.591.com.tw/home/house/detail/2/{case_id}.html"
+                            # Standardized format without /home/ or unnecessary /2/ if not needed
+                            # Most modern Sale details work with this format:
+                            full_url = f"https://sale.591.com.tw/house/detail/2/{case_id}.html"
+                            
                             if full_url not in all_found_set:
                                 all_found_set.add(full_url)
                                 page_new_count += 1
                                 log_f.write(f"[NEW] {full_url}\n")
+                                print(f"  [+] Found new sale link: {full_url}")
                                 with open(CSV_FILE, "a", encoding="utf-8-sig") as f:
                                     f.write(f"{full_url}\n")
                     
