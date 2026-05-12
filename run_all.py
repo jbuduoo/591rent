@@ -31,6 +31,16 @@ if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     try:
+        from sheets_helper import SheetsHelper
+        print(f"\n{'='*52}")
+        print("  [*] 正在測試 Google Sheets 連線 (Testing Sheets Auth)...")
+        sheets = SheetsHelper()
+        if not sheets.authenticated:
+            print("  [!] 錯誤：Google Sheets 認證失敗！")
+            print("  [!] 請確認 GitHub Secrets 中的 GCP_CREDENTIALS 是否正確設定。")
+            sys.exit(1)
+        print("  [+] Google Sheets 連線成功！")
+
         # Step 1-2: 591 Rent
         run_script("1_rent.py", "Step 1/4: 591 Rent URL Collection")
         run_script("2_rent.py", "Step 2/4: 591 Rent Details Extraction")
